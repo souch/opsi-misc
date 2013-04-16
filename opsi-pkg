@@ -1,0 +1,1093 @@
+#!/usr/bin/python
+
+# -*- coding: utf-8 -*-
+
+#
+# opsi-pkg, command line tools for OPSI
+# 
+# Copyright 2012, Mathieu Souchaud.
+# 
+# This is free software; you can redistribute it and/or modify it
+# under the terms of the GNU Lesser General Public License as
+# published by the Free Software Foundation; either version 2.1 of
+# the License, or (at your option) any later version.
+# 
+# This software is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+# Lesser General Public License for more details.
+# 
+# You should have received a copy of the GNU Lesser General Public
+# License along with this software; if not, write to the Free
+# Software Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA
+# 02110-1301 USA, or see the FSF site: http://www.fsf.org.
+#
+# Version 0.1
+
+# todo: 
+#   make-product-package seems to remove group?
+#   ping using ip
+#   set product properties
+#   list only one host
+#   remove or force warning state -f
+
+
+import argparse
+import re
+import time
+import datetime
+import string
+import socket
+
+from subprocess import Popen, PIPE
+
+## to adapt to your network:
+
+# default domain added to host name
+#defaultDomain = '.domain.lan'
+# guess it
+defaultDomain = '.' + '.'.join(socket.getfqdn().split('.')[1:])
+
+# number of day after which the host is shown in warning color (i.e. if lastSeen > warnSince)
+warnSince = 30
+# number of day after which the host is shown in error color
+errorSince = 200
+
+
+debug = False
+def logDebug(msg):
+    global debug
+    if debug: 
+        print grey + "DBG: " + str(msg) + reinitColor
+
+
+def logWarning(msg):
+    print red + "WRN: " + str(msg) + reinitColor
+
+
+info = True
+def logInfo(msg):
+    global info
+    if info: 
+        print blue + str(msg) + reinitColor
+
+
+verbose = False
+def logVerbose(msg):
+    global verbose
+    if verbose: 
+        print grey + str(msg) + reinitColor
+
+# by default: ask and print default answer
+default = False
+yes = False
+no = False
+
+ping = False
+
+
+grey = '\033[1;30m'
+red = '\033[1;31m'
+green = '\033[1;32m'
+blue = '\033[1;34m'
+reinitColor = '\033[1;m'
+
+
+def ask(msg, defaultAnswer):
+    ret = defaultAnswer
+
+    if defaultAnswer == True:
+        yesno = 'Y/n'
+    else:
+        yesno = 'y/N'
+    question = msg + ' (' + yesno + '): '
+
+    # unattended
+    if yes or no or default:
+        if yes:
+            ret = True
+        if no:
+            ret = False
+
+        if ret:
+            answer = 'y'
+        else:
+            answer = 'n'
+
+        logInfo(question + answer)
+
+    # ask the user
+    else:
+        answer = raw_input(question)
+        if answer == '':
+            pass
+        elif answer == 'y' or answer == 'Y':
+            ret = True
+        elif answer == 'n' or answer == 'N':
+            ret = False
+        else:
+            logWarning('answer not understood (' + answer + '). Abort.')
+            exit(1)
+
+    return ret
+            
+
+
+
+def callOpsiAdmin(cmd):
+    logDebug('launch command: ' + cmd)
+    p = Popen(cmd.split(), stdout=PIPE, stderr=PIPE)
+
+    out = p.communicate()
+    if p.returncode != 0:
+        logWarning('command "' + cmd + '" failed with status ' + str(p.returncode) + ' !')
+
+    if p.returncode != 0 or debug:
+        if out[0] != '':
+            logDebug('command stdout:\n' + str(out[0]))
+        if out[1] != '':
+            logDebug('command stderr:\n' + str(out[1]))
+
+    return out, p.returncode
+
+
+# opsi return python var that are not defined
+defVar = "false = False; true = True; null = None\n"
+
+# return the var of the opsi cmd
+def callOpsiAdminVar(cmd):
+    out, returncode = callOpsiAdmin(cmd)
+    exec(defVar + "var=" + out[0])
+    return var
+
+
+# store hosts results
+# { 'machine1.domain.lan': {'lastSeen': '2012-01-10 08:42:42', 'up': 'off'}, ... }
+hostsBuf = None
+
+# getHosts() must be called instead of using hostsBuf in order to avoid calling slow opsi-admin too often
+def getHosts():
+    global hostsBuf
+
+    if hostsBuf == None:
+        hostsBuf = {}
+        cmd = "opsi-admin -d method host_getObjects"
+        hosts_tmp = callOpsiAdminVar(cmd)
+
+        for h in hosts_tmp:
+            if h['type'] == 'OpsiClient':
+                hostsBuf[h['id']] = { 'lastSeen' : h['lastSeen'], 'up' : 'off', 'hardwareAddress' : h['hardwareAddress'], 'ip' : h['ipAddress'] }
+
+        if ping:
+            pingHosts(hostsBuf.keys())
+
+    return hostsBuf
+
+
+# set 'up' attribute to each pinggable host
+def pingHosts(hosts):
+    cmd = "oping -c 1 " + ' '.join(hosts)
+    logDebug(cmd)
+    
+    try:
+        out, returncode = callOpsiAdmin(cmd)
+    except:
+        logWarning('"oping" command need to be installed!')
+        logDebug("command launched: " + cmd)
+        return
+
+    for line in out[0].splitlines():
+        m = re.match('56 bytes from ([a-zA-Z0-9-.]+) .*icmp_seq=1', line)
+        # host is up
+        if m != None:
+            hostname = m.group(1).lower()
+            if getHosts().has_key(hostname):
+                getHosts()[hostname]['up'] = 'on'
+
+
+def deltaTimeToNow(timeStr):
+        t =  datetime.datetime.fromtimestamp(time.mktime(time.strptime(timeStr, '%Y-%m-%d %H:%M:%S')))
+        now =  datetime.datetime.now()
+        diffDate = t - now
+        if diffDate.days < 0:
+            diffDateStr = diffDate.days * -1
+        else:
+            diffDateStr = 0
+
+        return diffDateStr
+
+
+def printHostHeader():
+    if ping == True:
+        print 'host'.ljust(32) + 'ip'.ljust(15) + 'up'.ljust(6) + 'lastSeen'.ljust(22) + 'since'.ljust(8) + 'mac'
+    else:
+        print 'host'.ljust(32) + 'ip'.ljust(15) + 'lastSeen'.ljust(22) + 'since'.ljust(8) + 'mac'
+
+
+def printHostRow(host, pad = 0):
+    if host.endswith(defaultDomain):
+        hostStr = host[0 : len(host) - len(defaultDomain)]
+    else:
+        hostStr = host
+    hostStr = hostStr.ljust(32)
+
+    ip = getHosts()[host]['ip']
+
+    upStr = ''
+    if ping:
+        up = getHosts()[host]['up']
+        upStr = up.ljust(6)
+        if up == 'on':
+            upStr = blue + upStr + reinitColor
+
+    lastSeen = getHosts()[host]['lastSeen']
+    nbOfDay = deltaTimeToNow(lastSeen)
+    lastSeenStr = lastSeen.ljust(22) + (str(nbOfDay).ljust(3) + 'd').ljust(8)
+    if nbOfDay > errorSince:
+        lastSeenStr = red + lastSeenStr + reinitColor
+        hostStr = red + hostStr + reinitColor
+    elif nbOfDay > warnSince:
+        lastSeenStr = grey + lastSeenStr + reinitColor
+        hostStr = grey + hostStr + reinitColor
+
+    mac = getHosts()[host]['hardwareAddress']
+
+    print ''.ljust(pad) + hostStr + ip.ljust(15) + upStr + lastSeenStr + str(mac)
+
+
+
+def printHosts():
+    printHostHeader()
+    print ''
+    for k in sorted(getHosts()):
+        printHostRow(k)
+
+
+def actionHosts(call, hosts):
+    msg = ''
+    action = call[0]
+    if action == 'popup' and len(call) > 1:
+        msg = '"' + call[1] + '"'
+
+    if hosts == []:
+        hosts = getHosts().keys()
+    else:
+        hosts = checkHosts(addDefaultDomain(hosts))
+
+    # don't understand how use hostsId with opsi :-(
+    #hostsId = '\'["'
+    #hostsId = hostsId + '", "'.join(hosts) + '"]\''
+
+    if len(hosts) > 0:
+        (action + ' ' + msg + ' hosts: ' + str(hosts))
+    else:
+        logWarning('No valid hosts found!')
+
+    answer = ask('Launch ' + action + ' ' + msg + ' on hosts ' + str(hosts) + '?', True)
+    if not answer:
+        logInfo('Abort.')
+        return
+
+    for h in hosts:
+        if action == 'reboot':
+            cmd = "opsi-admin -d method hostControl_reboot " + h
+            callOpsiAdmin(cmd)
+
+        elif action == 'shutdown':
+            cmd = "opsi-admin -d method hostControl_shutdown " + h
+            callOpsiAdmin(cmd)
+
+        elif action == 'wakeup':
+            cmd = "opsi-admin -d method powerOnHost " + h
+            callOpsiAdmin(cmd)
+
+        elif action == 'delete':
+            cmd = "opsi-admin -d method deleteClient " + h
+            callOpsiAdmin(cmd)
+
+        elif action == 'fire':
+            cmd = 'opsi-admin -d method hostControl_fireEvent "on_demand" ' + h
+            callOpsiAdmin(cmd)
+
+        elif action == 'popup' and msg != '':
+            cmd = 'opsi-admin -d method hostControl_showPopup ' + msg + ' ' + h
+            callOpsiAdmin(cmd)
+
+        else:
+            parser.print_help()
+            exit(1)
+
+    logInfo('Done.')
+
+
+# store packages results
+# {'opsi-client-agent': {'packageVersion': '12', 'productVersion': '4.0.1'}, ... }
+packagesBuf = None
+
+def getPackages():
+    global packagesBuf
+
+    if packagesBuf == None:
+        packagesBuf = {}
+        cmd = "opsi-admin -d method product_getObjects"
+        packages_tmp = callOpsiAdminVar(cmd)
+
+        for p in packages_tmp:
+            if p['type'] == 'LocalbootProduct':
+                packagesBuf[p['id']] = { 'packageVersion' : p['packageVersion'], 'productVersion' : p['productVersion'] }
+
+    return packagesBuf
+
+
+def printPackageHeader():
+    print 'package'.ljust(32) + 'version'.ljust(10) + 'opsiVersion'.ljust(10)
+
+def printPackageRow(package, pad = 0):
+    productVersion = getPackages()[package]['productVersion']
+    packageVersion = getPackages()[package]['packageVersion']
+    print ''.ljust(pad) + package.ljust(32) + green + productVersion.ljust(10) + reinitColor + packageVersion.ljust(10)
+
+
+# return last product version
+# if host != None, return installed product version of the package on the host
+# on any error, return None
+def getPackageVersion(package, host = None):
+    if host == None:
+        if getPackages().has_key(package):
+            return getPackages()[package]['productVersion']
+        else:
+            return None
+    else:
+        for pv in getPackagesFromHosts():
+            if pv['clientId'] == host and \
+                    pv['productId'] == package and \
+                    pv['productType'] == 'LocalbootProduct' and \
+                    pv['installationStatus'] == 'installed':
+                        return pv['productVersion']
+        return None
+        
+
+def printPackages():
+    printPackageHeader()
+    print ''
+    for k in sorted(getPackages()):
+        printPackageRow(k)
+
+
+# store package host association
+# [{'clientId': 'machine1.domain.lan', 'productId': 'opsi-winst', 'productVersion': '4.11.1.1', 'actionRequest': 'none', 'installationStatus': 'installed', 'productType': 'LocalbootProduct', 'packageVersion': '2', 'type': 'ProductOnClient'}, ...]
+packagesHostsBuf = None
+
+def getPackagesFromHosts():
+    global packagesHostsBuf
+
+    if packagesHostsBuf == None:
+        packagesHostsBuf = []
+        cmd = "opsi-admin -d method productOnClient_getObjects"
+        packages_tmp = callOpsiAdminVar(cmd)
+
+        for p in packages_tmp:
+            packagesHostsBuf.append(p)
+
+    return packagesHostsBuf
+
+
+def addDefaultDomain(hosts):
+    hostsFqdn = []
+
+    for h in hosts:
+        if h.endswith(defaultDomain):
+            hostsFqdn.append(h)
+        else:
+            hostsFqdn.append(h + defaultDomain)
+
+    return hostsFqdn
+
+
+def checkHosts(hosts):
+    goodHosts = []
+    for h in hosts:
+        if not getHosts().has_key(h):
+            logWarning('host ' + h + ' does not exists!')
+        else:
+            goodHosts.append(h)
+
+    return goodHosts
+
+
+def printPackageHostHeader():
+    print "  " + 'package'.ljust(30) + \
+            'version'.ljust(10) + \
+            'action'.ljust(10)
+#            'status'.ljust(16) + \
+#            'last'.ljust(16)
+
+
+def printPackagesFromHosts(hosts):
+        hosts = checkHosts(hosts)
+
+        for k in sorted(getHosts()):
+            if hosts == [] or k in hosts:
+                printHostRow(k)
+                hostPackageHeaderSent = 0
+
+                for pv in getPackagesFromHosts():
+                    if pv['clientId'] == k and pv['productType'] == 'LocalbootProduct':
+                        logDebug(str(pv['productId']) + ' ' + str(pv['productVersion']) + ' ' + \
+                                str(pv['actionRequest']) + ' ' + str(pv['installationStatus']) + ' ' + \
+                                str(pv['lastAction']) + ' '  + str(pv['actionResult']))
+                        if pv['installationStatus'] == 'installed' or \
+                                pv['actionRequest'] == 'setup' or \
+                                pv['actionRequest'] == 'uninstall' or \
+                                pv['actionResult'] == 'failed':
+                            # colorize
+                            actionStr = ''
+                            if getPackageVersion(pv['productId']) != pv['productVersion']:
+                                versionColor = red
+                                if pv['actionRequest'] == 'setup':
+                                    actionStr = green + 'setup'
+                                else:
+                                    if pv['actionRequest'] == 'uninstall':
+                                        actionStr = green + 'uninstall'
+                                    else:
+                                        actionStr = red + 'nosetup'
+                                actionStr =  actionStr.ljust(16) + reinitColor
+                            else:
+                                versionColor = green
+                                if pv['actionRequest'] == 'uninstall':
+                                    actionStr = actionStr + 'uninstall'
+
+                            if pv['actionResult'] == 'failed':
+                                actionStr = actionStr + red + ' Last action "' + pv['lastAction'] + '" failed!' + reinitColor
+
+                            print "  " + pv['productId'].ljust(30) + \
+                                    versionColor +  str(pv['productVersion']).ljust(10) + reinitColor + \
+                                    actionStr
+#                                str(pv['installationStatus']).ljust(16) + \
+#                                str(pv['actionResult']).ljust(16)
+
+                print ''
+
+
+# store groups results
+# {'HostGroup': {'domain.lan': {'description': 'Every pc of domain.lan', 'parentGroupId': None}}, ...}
+groupsBuf = None
+
+# store group children
+# {'HostGroup': {'root': ['domain.lan']}, 
+#  'ProductGroup': {'root': [base, ...], 'base': ['bureautique'], ...}}
+childrenGroupsBuf = None
+
+def getGroups():
+    global groupsBuf
+    global childrenGroupsBuf
+
+    if groupsBuf == None:
+        groupsBuf = {}
+        childrenGroupsBuf = {}
+        cmd = "opsi-admin -d method group_getObjects"
+        groups_tmp = callOpsiAdminVar(cmd)
+
+        groupsBuf[ 'ProductGroup' ] = {}
+        groupsBuf[ 'HostGroup' ] = {}
+        childrenGroupsBuf[ 'ProductGroup' ] = {}
+        childrenGroupsBuf[ 'HostGroup' ] = {}
+        for g in groups_tmp:
+            # fills in groupsBuf
+            groupsBuf[ g['type'] ][ g['id'] ] = {'description' : g['description'], 'parentGroupId' : g['parentGroupId']}
+
+            # fills in childrenGroupsBuf
+            if g['parentGroupId'] == None:
+                parentGroup = 'root'
+            else:
+                parentGroup = g['parentGroupId'] 
+            if childrenGroupsBuf[ g['type'] ].has_key( parentGroup ):
+                childrenGroupsBuf[ g['type'] ][ parentGroup ].append(g['id'])
+            else:
+                childrenGroupsBuf[ g['type'] ][ parentGroup ] = [g['id']]
+
+    return groupsBuf
+
+
+def getChildrenGroups():
+    global childrenGroupsBuf
+
+    if childrenGroupsBuf == None:
+        getGroups()
+
+    return childrenGroupsBuf
+
+
+# store object to group association, improve :  {'groupType': {'groupid' : [...]}, ...}
+# [{'groupType': 'ProductGroup', 'groupId': 'base', 'objectId': 'firefox'},
+#  {'groupType': 'HostGroup', 'groupId': 'base', 'objectId': 'pc1.domain.lan'}, ...]
+objectsGroupsBuf = None
+
+def getObjectsGroups():
+    global objectsGroupsBuf
+
+    if objectsGroupsBuf == None:
+        objectsGroupsBuf = []
+        cmd = "opsi-admin -d method objectToGroup_getObjects"
+        objectsGroups_tmp = callOpsiAdminVar(cmd)
+
+        for og in objectsGroups_tmp:
+            objectsGroupsBuf.append(og)
+
+    return objectsGroupsBuf
+
+
+def getHostsOfGroup(group, recursive=True):
+    return getObjectsOfGroup('HostGroup', group, recursive)
+
+
+def getPackagesOfGroup(group, recursive=True):
+    return getObjectsOfGroup('ProductGroup', group, recursive)
+
+
+def getObjectsOfGroup(groupType, group, recursive=True):
+    """ 
+    get objects of given group
+    if recursive = True: give objects that belongs to children group too.
+    if group = None, give objects that does not belong to a group
+    """
+    # print objects of the group
+    objects = []
+
+    if group != None:
+
+        for og in getObjectsGroups():
+            if og['groupType'] == groupType and og['groupId'] == group:
+                objects.append(og['objectId'])
+
+        # print children group
+        if recursive and getChildrenGroups()[groupType].has_key(group):
+            objects += getObjectsOfGroup(groupType, group, recursive)
+
+    else:
+
+        if groupType == 'HostGroup':
+            allObjects = getHosts().keys()
+        else:
+            allObjects = getPackages().keys()
+
+        for o in allObjects:
+            objectHasGroup = False
+            for og in getObjectsGroups():
+                if og['groupType'] == groupType and og['objectId'] == o:
+                    objectHasGroup = True
+                    break
+            if not objectHasGroup:
+                objects.append(o)
+
+    return objects
+
+
+def printGroupsType(groupType, groups, level = 0):
+    for group in groups:
+        # print group
+        print ''.ljust(level) + blue + group.ljust(24 - level) + getGroups()[groupType][group]['description'] + reinitColor
+
+        # print objects of the group
+        objects = getObjectsOfGroup(groupType, group, recursive=False)
+        for o in sorted(objects):
+            if groupType == 'HostGroup':
+                printHostRow(o, 24)
+            else:
+                printPackageRow(o, 24)
+        print ''
+
+        # print children group
+        if getChildrenGroups()[groupType].has_key(group):
+            printGroupsType(groupType, getChildrenGroups()[groupType][group], level + 2)
+
+
+def printGroups(groupType):
+    # print object that belong to a group
+    printGroupsType(groupType, sorted(getChildrenGroups()[groupType]['root']))
+
+    # print lonely objects
+    nogroupObjects = getObjectsOfGroup(groupType, None, recursive=False)
+    if nogroupObjects != []:
+        print blue + 'nogroup'.ljust(24) + 'Objects that does not belong to a group.' + reinitColor
+        for o in sorted(nogroupObjects):
+            if groupType == 'HostGroup':
+                printHostRow(o, 24)
+            else:
+                printPackageRow(o, 24)
+
+
+def requestPackage(request, packages, hosts):
+
+    if hosts == []:
+        wantedHosts = getHosts().keys()
+    else:
+        wantedHosts = checkHosts(addDefaultDomain(hosts))
+
+    warn = False
+
+    wantedPackages = []
+    for package in packages:
+        if package not in getPackages():
+            logWarning("Package " + package + " does not exists!")
+            warn = True
+        else:
+            wantedPackages.append(package)
+
+    for host in wantedHosts:
+        for package in wantedPackages:
+            if request == 'setup' and not needInstall(host, package):
+                logWarning('Package ' + package + ' does not need to be installed on host ' + host)
+                warn = True
+
+    logInfo('  ' + request + ' package ' + str(wantedPackages) + ' on host ' + str(wantedHosts))
+    if warn:
+        answer = ask('Errors appear, ' + request + ' it anyway?', defaultAnswer=False)
+    else:
+        answer = ask(request + ' it?', defaultAnswer=True)
+
+    if answer:
+        for host in wantedHosts:
+            for package in wantedPackages:
+                cmd = 'opsi-admin -d method setProductActionRequest ' + package + ' ' + host + ' ' + request
+                callOpsiAdmin(cmd)
+                logInfo('  ' + request + ' ' + package + ' on host ' + host)
+
+
+# return True if the package need to be installed on the host
+def needInstall(host, package):
+    # up to date
+    if getPackageVersion(package) == getPackageVersion(package, host):
+        return False
+
+    # setup already required
+    for pv in getPackagesFromHosts():
+        if pv['clientId'] == host and \
+                pv['productId'] == package and \
+                pv['productType'] == 'LocalbootProduct' and \
+                pv['installationStatus'] == 'setup':
+            return False
+
+    return True
+
+
+# create/update a group
+def addGroup(groupType, group, description, parent = None):
+    if parent != None and parent not in getGroups()[groupType]:
+        logWarning('parent group ' + parent + ' does not exists. abort.')
+        return 
+
+    already_exists = False
+    for g in getGroups()[groupType]:
+        if g == group:
+            already_exists = True
+            break
+
+    if not already_exists:
+        if ask('create group ' + group + '?', defaultAnswer=True):
+            cmd = 'opsi-admin -d method group_create' + groupType + ' ' + group + ' ' + '"' + description + '"'
+            callOpsiAdmin(cmd)
+            
+            if parent != None:
+                parentStr = '"' + parent + '"'
+            else:
+                parentStr = 'null'
+            cmd = 'opsi-admin -d method group_updateObject \'{"ident" : "' + group + '", "description" : "' + description + \
+                    '", "parentGroupId" : ' + parentStr + ', "type" : "' + groupType + '", "id" : "' + group + '"}\''
+            callOpsiAdmin(cmd)
+
+            logInfo('group ' + group + ' added')
+
+    else:
+        logInfo('group ' + group + ' already exists')
+        
+
+
+# opsi cannot have same name in product group and host group
+# so we can guess the group type from the group name
+def getGroupType(group):
+    groupType = None
+
+    if group in getGroups()['HostGroup']:
+        groupType = 'HostGroup'
+    elif group in getGroups()['ProductGroup']:
+        groupType = 'ProductGroup'
+
+    return groupType
+
+
+# add objects to a group
+def addGroupObjects(group, objects = []):
+    groupType = getGroupType(group)
+    if groupType == None:
+        logWarning('no group ' + group + ' found. abort.')
+        return
+    elif groupType == 'HostGroup':
+        if len(objects) == 0:
+            objects = getHosts().keys()
+        objects = addDefaultDomain(objects)
+    elif groupType == 'ProductGroup' and len(objects) == 0:
+        objects = getPackages().keys()
+
+    ok_objects = []
+    warn = False
+    for o in objects:
+        if (groupType == 'HostGroup' and o in getHosts()) or \
+           (groupType == 'ProductGroup' and o in getPackages()):
+            ok_objects.append(o)
+        else:
+            logWarning('object ' + o + ' does not exists. Removed from wanted objects.')
+    if warn:
+        answer = ask('Errors appear. Add ' + str(ok_objects) + ' to group ' + group + ' anyway?', defaultAnswer=False)
+    else:
+        answer = ask('Add ' + str(ok_objects) + ' to group ' + group + '?', defaultAnswer=True)
+    if answer:
+        for o in ok_objects:
+            cmd = 'opsi-admin -d method objectToGroup_create ' + groupType + ' ' + group + ' ' + o
+            callOpsiAdmin(cmd)
+            logInfo('object ' + o + ' added to group ' + group)
+
+    #print ''
+    #if info:
+    #    printGroups(groupType) 
+
+
+# if no objects given : remove the group and every objects
+# if objects given : remove only the objects, not the group
+def deleteGroup(group, objects = []):
+    groupType = getGroupType(group)
+    if groupType == None:
+        logWarning('no group ' + group + ' found. abort.')
+        return
+    elif groupType == 'HostGroup':
+        objects = addDefaultDomain(objects)
+
+    if objects != []:
+        answer = ask('Delete ' + str(objects) + ' from group ' + group + '?', 
+                     defaultAnswer=True)
+        if answer:
+            for og in objects:
+                cmd = 'opsi-admin -d method objectToGroup_delete ' + groupType + ' ' + group + ' ' + og
+                callOpsiAdmin(cmd)
+                logInfo('  object ' + og + ' of ' + groupType + ' ' + group + ' deleted')
+
+    else:
+        answer = ask('Delete group ' + group + '?', defaultAnswer=True)
+        if answer:
+            # (opsi delete group objects on group deletion)
+            cmd = 'opsi-admin -d method group_delete ' + group
+            callOpsiAdmin(cmd)
+            logInfo(groupType + ' ' + group + ' deleted')
+
+
+
+# speed test
+def testBuf(trucs):
+    getGroups()
+    getHosts()
+    getObjectsGroups()
+    getPackages()
+    getPackagesFromHosts()
+
+
+# store help message to replace
+replaceHelp = {}
+
+# print help message
+# replace help message if argument present in replaceHelp dict
+def printHelp(parser):
+    helpStr = parser.format_help()
+    helpLines = helpStr.splitlines()
+    for r in replaceHelp.keys():
+        for i in range(len(helpLines)):
+            if r in helpLines[i]:
+                helpLines[i] = '  ' + r + ' ' + replaceHelp[r]
+
+    print '\n'.join(helpLines)
+
+
+def getSelectedHosts(hosts, host_groups):
+    selected = []
+    if hosts != None:
+        selected = hosts
+    if host_groups != None:
+        for host_group in host_groups:
+            selected += getHostsOfGroup(host_group)
+    return selected
+
+def getSelectedPackages(packages, package_groups):
+    selected = []
+    if packages != None:
+        selected = packages
+    if package_groups != None:
+        for package_group in package_groups:
+            selected += getPackagesOfGroup(package_group)
+    return selected
+
+examples = """
+=========
+Examples:
+
+# list every packages
+opsi-pkg -l -p
+
+# list every hosts and show their up status
+opsi-pkg -l -h --ping
+
+-
+
+# list installed packages on tata computer
+opsi-pkg -l -p -h tata
+
+# list installed packages on every computer
+opsi-pkg -l -p -h
+
+-
+
+# list host groups
+opsi-pkg -l -hg 
+
+# create an host group "pc" without asking it
+opsi-pkg -a -hg pc 'all desktop pc' -y
+
+# create an host group "chicago" and wich has for parent 'pc' host group
+opsi-pkg -a -hg chicago 'chicago network' pc
+
+# add to host group "pc" the machines "tata, toto, and titi"
+opsi-pkg -a -hg pc -h tata toto titi
+
+# add to host group "pc" every machines of OPSI
+opsi-pkg -a -hg pc -h
+
+# delete host titi from host group "pc"
+opsi-pkg -d -hg pc -h titi
+
+# delete host group "pc"
+opsi-pkg -d -hg pc
+
+# list package groups
+opsi-pkg -l -pg 
+
+# create a package group "base" 
+opsi-pkg -a -pg base 'default program'
+
+-
+
+# call 'hello' popup on each computer that belongs to 'pc' host group
+opsi-pkg -c popup 'hello' -hg pc
+
+# delete host tutu from OPSI
+opsi-pkg -c delete -h tutu
+
+# install firefox on computer tata
+opsi-pkg -s -p firefox -h tata
+
+# install firefox on computers that belongs to 'pc' host group
+opsi-pkg -s -p firefox -hg pc
+
+# install firefox on computers that belongs to 'pc' host group
+opsi-pkg -s -p firefox -hg pc
+
+# install base packages on computers that belongs to 'pc' host group
+opsi-pkg -s -pg base -hg pc
+
+
+======
+Notes:
+  OPSI cannot have same name in product group and host group
+
+"""
+
+if __name__ == '__main__':
+
+    parser = argparse.ArgumentParser(description="simple opsi package manager interface", 
+        epilog=examples, 
+        add_help=False, 
+        formatter_class=argparse.RawTextHelpFormatter)
+    parser.add_argument('--help', action='store_const', const=[], help='show this help message and exit')
+
+    parser.add_argument('--quiet', '-q', action='store_const', const=[], help='do not print info log')
+    parser.add_argument('--verbose', '-v', action='store_const', const=[], help='print more log')
+    parser.add_argument('--debug', action='store_const', const=[], help='print even more log')
+
+    parser.add_argument('--default', action='store_const', const=[], help='answer default answer to every question')
+    parser.add_argument('--yes', '-y', action='store_const', const=[], help='answer yes to every question')
+    parser.add_argument('--no', action='store_const', const=[], help='answer no to every question')
+
+    parser.add_argument('--ping', action='store_const', const=[], help='show host status (on/off)')
+
+    parser.add_argument('--list', '-l', action='store_const', const=[], 
+        help='List something. Combine it with: -h, -p, -h -p, -hg, -pg.')
+    parser.add_argument('--add', '-a', action='store_const', const=[], 
+        help='Add something. Combine it with: -hg, -pg, -hg -h, -pg -p')
+    parser.add_argument('--delete', '-d', action='store_const', const=[], 
+        help='Delete something. Combine it with: -hg, -pg, -hg -h, -pg -p.')
+    parser.add_argument('--call', '-c', nargs='*', 
+        help='Call an action on given hosts. Combine it with: -hg, -h.')
+    replaceHelp['--call'] = '{shutdown, reboot, wakeup, delete, fire, popup "message"} [-h ...]'
+    parser.add_argument('--setup', '-s', action='store_const', const=[], 
+        help='Install products on given hosts. Combine it with: -h, -p.')
+    parser.add_argument('--uninstall', '-u', action='store_const', const=[], 
+        help='Uninstall products on given hosts. Combine it with: -h, -p.')
+
+    parser.add_argument('--host', '-h', nargs='*', help='Do sthg with host. No host given means every hosts.)')
+    parser.add_argument('--package', '-p', nargs='*', help='Do sthg with package. No package given means every packages.')
+    parser.add_argument('--host-group', '-hg', nargs='*', help='Do sthg with host group')
+    parser.add_argument('--package-group', '-pg', nargs='*', help='Do sthg with package group')
+
+
+    #parser.add_argument('-v', dest='verbose', action='store_true')
+    args = parser.parse_args()
+
+    # print help if launched without args
+    if string.find(str(args), '[') == -1 and string.find(str(args), "='") == -1:
+        printHelp(parser)
+
+    # print help if asked
+    if args.help != None:
+        printHelp(parser)
+
+
+    if args.debug != None:
+        debug = True
+        logDebug("args: " + str(args))
+
+    if args.verbose != None:
+        verbose = True
+
+    if args.quiet != None:
+        info = False
+
+
+    if args.default != None:
+        default = True
+    if args.yes != None:
+        yes = True
+    if args.no != None:
+        no = True
+
+    if args.ping != None:
+        ping = True
+
+
+    cmd = False
+
+    if args.list != None:
+        cmd = True
+        what = False
+        if args.host != None and args.package != None:
+            what = True
+            printPackagesFromHosts(addDefaultDomain(args.host)) 
+        else:
+            if args.host != None:
+                what = True
+                printHosts()
+            if args.package != None:
+                what = True
+                printPackages()
+        if args.host_group != None:
+            what = True
+            printGroups('HostGroup')
+        if args.package_group != None:
+            what = True
+            printGroups('ProductGroup')
+        if not what:
+            logWarning("You did not specify what to list!")
+
+
+    if args.add != None:
+        cmd = True
+        what = False
+        if args.host_group != None and len(args.host_group) > 0:
+            what = True
+            if args.host != None:
+                addGroupObjects(args.host_group[0], args.host)
+            else:
+                description = args.host_group[1] if len(args.host_group) > 1 else ''
+                parent = args.host_group[2] if len(args.host_group) > 2 else None
+                addGroup('HostGroup', args.host_group[0], description, parent)
+            #print ''
+            #printGroups('HostGroup')
+
+        if args.package_group != None and len(args.package_group) > 0:
+            what = True
+            if args.package != None:
+                addGroupObjects(args.package_group[0], args.package)
+            else:
+                description = args.package_group[1] if len(args.package_group) > 1 else ''
+                parent = args.package_group[2] if len(args.package_group) > 2 else None
+                addGroup('ProductGroup', args.package_group[0], description, parent)
+            #print ''
+            #printGroups('ProductGroup')
+         
+        if not what:
+            logWarning("You did not specify what to add!")
+
+
+    if args.delete != None:
+        cmd = True
+        what = False
+
+        if args.host_group != None:
+            what = True
+            hosts = []
+            if args.host != None:
+                hosts = args.host
+            for group in args.host_group:
+                deleteGroup(group, hosts)
+            # todo: flush cache before printing groups
+            #printGroups('HostGroup')
+
+        if args.package_group != None:
+            what = True
+            packages = []
+            if args.package != None:
+                packages = args.package
+            for group in args.package_group:
+                deleteGroup(group, packages)
+            # todo: flush cache before printing groups
+            #printGroups('ProductGroup')
+
+        if not what:
+            logWarning("You did not specify what to delete!")
+
+
+    if args.call != None:
+        cmd = True
+        what = False
+        if len(args.call) > 0:
+            what = True
+            hosts = getSelectedHosts(args.host, args.host_group)
+            # todo: add host of host group
+            actionHosts(args.call, hosts)
+
+        if not what:
+            logWarning("You did not specify what to call!")
+
+
+    if args.setup != None or args.uninstall != None:
+        cmd = True
+        what = False
+
+        if args.setup != None:
+            action = 'setup'
+        else:
+            action = 'uninstall'
+
+        hosts = getSelectedHosts(args.host, args.host_group)
+        packages = getSelectedPackages(args.package, args.package_group)
+
+        if len(packages) > 0:
+            what = True
+            requestPackage(action, packages, hosts)
+
+        if not what:
+            logWarning("You did not specify what to " + action + "!")
+
+
+
+    if not cmd:
+        logWarning("You did not specify a command!")
+
+
+
