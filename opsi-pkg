@@ -24,12 +24,14 @@
 #
 # Version 0.1
 
-# todo: 
-#   make-product-package seems to remove group?
-#   ping using ip
+# TODO: 
 #   set product properties
+#   add: set request to none
+#   add: set status manually
 #   list only one host
-#   remove or force warning state -f
+#   ping using ip
+#   follow Python coding guidelines
+#   check if make-product-package remove defined group
 
 
 import argparse
@@ -82,6 +84,8 @@ def logVerbose(msg):
 default = False
 yes = False
 no = False
+
+force = False
 
 ping = False
 
@@ -267,7 +271,7 @@ def actionHosts(call, hosts):
     msg = ''
     action = call[0]
     if action == 'popup' and len(call) > 1:
-        msg = '"' + call[1] + '"'
+        msg = ' "' + call[1] + '"'
 
     if hosts == []:
         hosts = getHosts().keys()
@@ -278,12 +282,11 @@ def actionHosts(call, hosts):
     #hostsId = '\'["'
     #hostsId = hostsId + '", "'.join(hosts) + '"]\''
 
-    if len(hosts) > 0:
-        (action + ' ' + msg + ' hosts: ' + str(hosts))
-    else:
-        logWarning('No valid hosts found!')
+    if len(hosts) == 0:
+        logWarning('No valid hosts found!. Abort.')
+        return
 
-    answer = ask('Launch ' + action + ' ' + msg + ' on hosts ' + str(hosts) + '?', True)
+    answer = ask('Launch ' + action + msg + ' on hosts ' + str(hosts) + '?', True)
     if not answer:
         logInfo('Abort.')
         return
@@ -636,8 +639,14 @@ def requestPackage(request, packages, hosts):
 
     for host in wantedHosts:
         for package in wantedPackages:
-            if request == 'setup' and not needInstall(host, package):
-                logWarning('Package ' + package + ' does not need to be installed on host ' + host)
+            if (request == 'setup' and not needInstall(host, package)) or \
+               (request == 'uninstall' and needInstall(host, package)):
+                warnStr = 'Package ' + package + ' does not need to be ' + action + ' on host ' + host
+                if force:
+                    warnStr += ' : request asked will still be done'
+                else:
+                    warnStr += ' : request skipped'
+                logWarning(warnStr)
                 warn = True
 
     logInfo('  ' + request + ' package ' + str(wantedPackages) + ' on host ' + str(wantedHosts))
@@ -649,9 +658,16 @@ def requestPackage(request, packages, hosts):
     if answer:
         for host in wantedHosts:
             for package in wantedPackages:
+                if (not force) and \
+                   ((request == 'setup' and not needInstall(host, package)) or \
+                    (request == 'uninstall' and needInstall(host, package))):
+                    continue
                 cmd = 'opsi-admin -d method setProductActionRequest ' + package + ' ' + host + ' ' + request
                 callOpsiAdmin(cmd)
                 logInfo('  ' + request + ' ' + package + ' on host ' + host)
+    else:
+        logInfo('Abort.')
+        return
 
 
 # return True if the package need to be installed on the host
@@ -665,7 +681,8 @@ def needInstall(host, package):
         if pv['clientId'] == host and \
                 pv['productId'] == package and \
                 pv['productType'] == 'LocalbootProduct' and \
-                pv['installationStatus'] == 'setup':
+                (pv['installationStatus'] == 'setup' or \
+                 pv['actionRequest'] == 'setup'):
             return False
 
     return True
@@ -683,7 +700,11 @@ def addGroup(groupType, group, description, parent = None):
             already_exists = True
             break
 
-    if not already_exists:
+    if already_exists:
+        logInfo('group ' + group + ' already exists')
+
+    if not already_exists or force:
+        
         if ask('create group ' + group + '?', defaultAnswer=True):
             cmd = 'opsi-admin -d method group_create' + groupType + ' ' + group + ' ' + '"' + description + '"'
             callOpsiAdmin(cmd)
@@ -698,10 +719,11 @@ def addGroup(groupType, group, description, parent = None):
 
             logInfo('group ' + group + ' added')
 
-    else:
-        logInfo('group ' + group + ' already exists')
-        
+        else:
+            logInfo('Abort.')
+            return
 
+        
 
 # opsi cannot have same name in product group and host group
 # so we can guess the group type from the group name
@@ -747,6 +769,9 @@ def addGroupObjects(group, objects = []):
             callOpsiAdmin(cmd)
             logInfo('object ' + o + ' added to group ' + group)
 
+    else:
+        logInfo('Abort.')
+        return
     #print ''
     #if info:
     #    printGroups(groupType) 
@@ -770,6 +795,10 @@ def deleteGroup(group, objects = []):
                 cmd = 'opsi-admin -d method objectToGroup_delete ' + groupType + ' ' + group + ' ' + og
                 callOpsiAdmin(cmd)
                 logInfo('  object ' + og + ' of ' + groupType + ' ' + group + ' deleted')
+        else:
+            logInfo('Abort.')
+            return
+
 
     else:
         answer = ask('Delete group ' + group + '?', defaultAnswer=True)
@@ -778,6 +807,9 @@ def deleteGroup(group, objects = []):
             cmd = 'opsi-admin -d method group_delete ' + group
             callOpsiAdmin(cmd)
             logInfo(groupType + ' ' + group + ' deleted')
+        else:
+            logInfo('Abort.')
+            return
 
 
 
@@ -904,17 +936,30 @@ if __name__ == '__main__':
         epilog=examples, 
         add_help=False, 
         formatter_class=argparse.RawTextHelpFormatter)
-    parser.add_argument('--help', action='store_const', const=[], help='show this help message and exit')
+    parser.add_argument('--help', action='store_const', const=[], 
+                        help='show this help message and exit')
 
-    parser.add_argument('--quiet', '-q', action='store_const', const=[], help='do not print info log')
-    parser.add_argument('--verbose', '-v', action='store_const', const=[], help='print more log')
-    parser.add_argument('--debug', action='store_const', const=[], help='print even more log')
+    parser.add_argument('--quiet', '-q', action='store_const', const=[], 
+                        help='do not print info log')
+    parser.add_argument('--verbose', '-v', action='store_const', const=[], 
+                        help='print more log')
+    parser.add_argument('--debug', action='store_const', const=[], 
+                        help='print even more log')
 
-    parser.add_argument('--default', action='store_const', const=[], help='answer default answer to every question')
-    parser.add_argument('--yes', '-y', action='store_const', const=[], help='answer yes to every question')
-    parser.add_argument('--no', action='store_const', const=[], help='answer no to every question')
+    parser.add_argument('--default', action='store_const', const=[], 
+                        help='answer default answer to every question')
+    parser.add_argument('--yes', '-y', action='store_const', const=[], 
+                        help='answer yes to every question')
+    parser.add_argument('--no', action='store_const', const=[], 
+                        help='answer no to every question')
 
-    parser.add_argument('--ping', action='store_const', const=[], help='show host status (on/off)')
+    parser.add_argument('--force', '-f', action='store_const', const=[],
+                        help='force doing action that does seems to be needed. '
+                        'e.g. install a package on a host '
+                        'that has already the last package installed.')
+
+    parser.add_argument('--ping', action='store_const', const=[], 
+                        help='show host status (on/off)')
 
     parser.add_argument('--list', '-l', action='store_const', const=[], 
         help='List something. Combine it with: -h, -p, -h -p, -hg, -pg.')
@@ -965,6 +1010,9 @@ if __name__ == '__main__':
         yes = True
     if args.no != None:
         no = True
+
+    if args.force != None:
+        force = True
 
     if args.ping != None:
         ping = True
