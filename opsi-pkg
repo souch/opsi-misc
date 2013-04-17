@@ -623,51 +623,67 @@ def printGroups(groupType):
 def requestPackage(request, packages, hosts):
 
     if hosts == []:
-        wantedHosts = getHosts().keys()
+        okHosts = getHosts().keys()
     else:
-        wantedHosts = checkHosts(addDefaultDomain(hosts))
+        okHosts = checkHosts(addDefaultDomain(hosts))
 
     warn = False
 
-    wantedPackages = []
+    okPackages = []
     for package in packages:
         if package not in getPackages():
             logWarning("Package " + package + " does not exists!")
             warn = True
         else:
-            wantedPackages.append(package)
+            okPackages.append(package)
 
-    for host in wantedHosts:
-        for package in wantedPackages:
+    installDic = {}
+    for host in okHosts:
+        installDic[host] = []
+        for package in okPackages:
             if (request == 'setup' and not needInstall(host, package)) or \
                (request == 'uninstall' and needInstall(host, package)):
                 warnStr = 'Package ' + package + ' does not need to be ' + action + ' on host ' + host
                 if force:
                     warnStr += ' : request asked will still be done'
+                    installDic[host].append(package)
                 else:
                     warnStr += ' : request skipped'
                 logWarning(warnStr)
                 warn = True
+            else:
+                installDic[host].append(package)
 
-    logInfo('  ' + request + ' package ' + str(wantedPackages) + ' on host ' + str(wantedHosts))
-    if warn:
-        answer = ask('Errors appear, ' + request + ' it anyway?', defaultAnswer=False)
+    # log
+    if warn and not force:
+        # print detailed installation status
+        for host in installDic.keys():
+            if len(installDic[host]) > 0:
+                logInfo('  ' + request + ' on host ' + host.ljust(32) + ' packages ' + str(installDic[host]))
     else:
-        answer = ask(request + ' it?', defaultAnswer=True)
+        # print factorized installation status
+        logInfo('  ' + request + ' on hosts ' + str(okHosts)  + '\n        packages ' + str(okPackages))
 
-    if answer:
-        for host in wantedHosts:
-            for package in wantedPackages:
-                if (not force) and \
-                   ((request == 'setup' and not needInstall(host, package)) or \
-                    (request == 'uninstall' and needInstall(host, package))):
-                    continue
-                cmd = 'opsi-admin -d method setProductActionRequest ' + package + ' ' + host + ' ' + request
-                callOpsiAdmin(cmd)
-                logInfo('  ' + request + ' ' + package + ' on host ' + host)
+    nbPackagesToInstall = 0
+    for host in installDic.keys():
+        nbPackagesToInstall += len(installDic[host])
+    if nbPackagesToInstall == 0:
+        logInfo('No package to install.')
     else:
-        logInfo('Abort.')
-        return
+        if warn:
+            answer = ask('Errors appear, ' + request + ' it anyway?', defaultAnswer=False)
+        else:
+            answer = ask(request + ' it?', defaultAnswer=True)
+
+        if answer:
+            for host in installDic.keys():
+                for package in installDic[host]:
+                    cmd = 'opsi-admin -d method setProductActionRequest ' + package + ' ' + host + ' ' + request
+                    callOpsiAdmin(cmd)
+                    logInfo('  ' + request + ' ' + package + ' on host ' + host)
+        else:
+            logInfo('Abort.')
+            return
 
 
 # return True if the package need to be installed on the host
