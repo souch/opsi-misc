@@ -27,6 +27,7 @@
 # TODO: 
 #   set product properties
 #   add: set request to none
+#   fix: when ask for uninstall and not installed but request already to setup : set request to none
 #   add: set status manually
 #   add: call fire after request
 #   list only one host
