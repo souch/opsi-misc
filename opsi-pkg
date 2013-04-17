@@ -28,6 +28,7 @@
 #   set product properties
 #   add: set request to none
 #   add: set status manually
+#   add: call fire after request
 #   list only one host
 #   ping using ip
 #   follow Python coding guidelines
@@ -688,9 +689,11 @@ def requestPackage(request, packages, hosts):
 
 # return True if the package need to be installed on the host
 def needInstall(host, package):
+    needSetup = True
+
     # up to date
     if getPackageVersion(package) == getPackageVersion(package, host):
-        return False
+        needSetup = False
 
     # setup already required
     for pv in getPackagesFromHosts():
@@ -699,9 +702,11 @@ def needInstall(host, package):
                 pv['productType'] == 'LocalbootProduct' and \
                 (pv['installationStatus'] == 'setup' or \
                  pv['actionRequest'] == 'setup'):
-            return False
+            needSetup = False
+            break
 
-    return True
+    logDebug('host ' + host + ' need to install ' + package + ': ' + str(needSetup))
+    return needSetup
 
 
 # create/update a group
@@ -930,8 +935,9 @@ opsi-pkg -c delete -h tutu
 # install firefox on computer tata
 opsi-pkg -s -p firefox -h tata
 
-# install firefox on computers that belongs to 'pc' host group
-opsi-pkg -s -p firefox -hg pc
+# install firefox on computers that belongs to 'pc' host group even if it is 
+# already install and up-to-date
+opsi-pkg -s -p firefox -hg pc --force
 
 # install firefox on computers that belongs to 'pc' host group
 opsi-pkg -s -p firefox -hg pc
