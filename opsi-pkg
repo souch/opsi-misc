@@ -344,6 +344,55 @@ def getPackages():
     return packagesBuf
 
 
+# store packages possible properties 
+# {"config-win": [{'propertyId': "flag_rdp",  'defaultValues' : "admins",  'possibleValues' : ["admins","off","users"]}, ... ], ... }
+packagesPropertiesBuf = None
+
+def getPackagesProperties():
+    global packagesPropertiesBuf
+
+    if packagesPropertiesBuf == None:
+        packagesPropertiesBuf = {}
+        cmd = "opsi-admin -d method productProperty_getObjects"
+        props = callOpsiAdminVar(cmd)
+
+        for prop in props:
+            #if prop['type'] == 'ProductPropertyState':
+            content = { 'propertyId' : prop['propertyId'], 'defaultValues' : prop['defaultValues'], 'possibleValues' : prop['possibleValues'] }
+            if packagesPropertiesBuf.has_key(prop['productId']):
+                packagesPropertiesBuf[prop['productId']].append(content)
+            else:
+                packagesPropertiesBuf[prop['productId']] = [content]
+
+    return packagesPropertiesBuf
+
+
+# store packages properties state
+# {"pc.domain.lan" : {"config-win" : [ {'propertyId' : "flag_rdp",  'values' : ["users" ]}, ... ], ... }, ... }
+packagesPropertiesStateBuf = None
+
+def getPackagesPropertiesState():
+    global packagesPropertiesStateBuf
+
+    if packagesPropertiesStateBuf == None:
+        packagesPropertiesStateBuf = {}
+        cmd = "opsi-admin -d method productPropertyState_getObjects"
+        props = callOpsiAdminVar(cmd)
+
+        for prop in props:
+            if prop['type'] == 'ProductPropertyState':
+                content = { 'propertyId' : prop['propertyId'], 'values' : prop['values'] }
+                if packagesPropertiesStateBuf.has_key(prop['objectId']):
+                    if packagesPropertiesStateBuf[prop['objectId']].has_key(prop['productId']):
+                        packagesPropertiesStateBuf[prop['objectId']][prop['productId']].append(content)
+                    else:
+                        packagesPropertiesStateBuf[prop['objectId']][prop['productId']] = [content]
+                else:
+                    packagesPropertiesStateBuf[prop['objectId']] = { prop['productId'] : [content] }
+
+    return packagesPropertiesStateBuf
+
+
 def printPackageHeader():
     print 'package'.ljust(32) + 'version'.ljust(10) + 'opsiVersion'.ljust(10)
 
@@ -352,6 +401,13 @@ def printPackageRow(package, pad = 0):
     packageVersion = getPackages()[package]['packageVersion']
     print ''.ljust(pad) + package.ljust(32) + green + productVersion.ljust(10) + reinitColor + packageVersion.ljust(10)
 
+
+def printPackageProperties(package, pad = 0):
+    if getPackagesProperties().has_key(package):
+        for prop in getPackagesProperties()[package]:
+            print ''.ljust(pad) + prop['propertyId'].ljust(32-pad) + str(prop['possibleValues']).ljust(16) + ' d:' + str(prop['defaultValues'])
+    
+    
 
 # return last product version
 # if host != None, return installed product version of the package on the host
@@ -375,8 +431,9 @@ def getPackageVersion(package, host = None):
 def printPackages():
     printPackageHeader()
     print ''
-    for k in sorted(getPackages()):
-        printPackageRow(k)
+    for package in sorted(getPackages()):
+        printPackageRow(package)
+        printPackageProperties(package, 2)
 
 
 # store package host association
@@ -465,11 +522,13 @@ def printPackagesFromHosts(hosts):
                             if pv['actionResult'] == 'failed':
                                 actionStr = actionStr + red + ' Last action "' + pv['lastAction'] + '" failed!' + reinitColor
 
-                            print "  " + pv['productId'].ljust(30) + \
+                            print '  ' + pv['productId'].ljust(30) + \
                                     versionColor +  str(pv['productVersion']).ljust(10) + reinitColor + \
                                     actionStr
-#                                str(pv['installationStatus']).ljust(16) + \
-#                                str(pv['actionResult']).ljust(16)
+                            if getPackagesPropertiesState().has_key(k) and getPackagesPropertiesState()[k].has_key(pv['productId']):
+                                packageProps = getPackagesPropertiesState()[k][pv['productId']]
+                                for packageProp in packageProps:
+                                    print '    ' + str(packageProp['propertyId']) + ': ' + str(packageProp['values'])
 
                 print ''
 
@@ -670,7 +729,7 @@ def requestPackage(request, packages, hosts, fire):
     for host in installDic.keys():
         nbPackagesToInstall += len(installDic[host])
     if nbPackagesToInstall == 0:
-        logInfo('No package to install.')
+        logInfo('No package to ' + request + '.')
     else:
         if warn:
             answer = ask('Errors appear, ' + request + ' it anyway?', defaultAnswer=False)
@@ -991,7 +1050,7 @@ if __name__ == '__main__':
                         help='Fire the request now (i.e. push the request to the hosts).')
 
     parser.add_argument('--ping', action='store_const', const=[], 
-                        help='show host status (on/off)')
+                        help='show hosts status (on/off)')
 
     parser.add_argument('--list', '-l', action='store_const', const=[], 
         help='List something. Combine it with: -h, -p, -h -p, -hg, -pg.')
