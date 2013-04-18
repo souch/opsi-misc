@@ -405,7 +405,7 @@ def printPackageRow(package, pad = 0):
 def printPackageProperties(package, pad = 0):
     if getPackagesProperties().has_key(package):
         for prop in getPackagesProperties()[package]:
-            print ''.ljust(pad) + prop['propertyId'].ljust(32-pad) + str(prop['possibleValues']).ljust(16) + ' d:' + str(prop['defaultValues'])
+            print ''.ljust(pad) + grey + prop['propertyId'].ljust(32-pad) + str(prop['possibleValues']).ljust(16) + '  d:' + str(prop['defaultValues']) + reinitColor
     
     
 
@@ -528,7 +528,7 @@ def printPackagesFromHosts(hosts):
                             if getPackagesPropertiesState().has_key(k) and getPackagesPropertiesState()[k].has_key(pv['productId']):
                                 packageProps = getPackagesPropertiesState()[k][pv['productId']]
                                 for packageProp in packageProps:
-                                    print '    ' + str(packageProp['propertyId']) + ': ' + str(packageProp['values'])
+                                    print '    ' + grey + str(packageProp['propertyId']) + ': ' + str(packageProp['values']) + reinitColor
 
                 print ''
 
