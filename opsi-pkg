@@ -339,7 +339,13 @@ def getPackages():
 
         for p in packages_tmp:
             if p['type'] == 'LocalbootProduct':
-                packagesBuf[p['id']] = { 'packageVersion' : p['packageVersion'], 'productVersion' : p['productVersion'] }
+                packagesBuf[p['id']] = { 'packageVersion' : p['packageVersion'], 
+                                         'productVersion' : p['productVersion'],
+                                         'scripts' : [] }
+                scriptNames = ['setup', 'uninstall', 'once', 'update', 'custom', 'userLogin', 'always']
+                for script in scriptNames:
+                    if p[script + 'Script'] != "":
+                        packagesBuf[p['id']]['scripts'].append(script)
 
     return packagesBuf
 
@@ -394,12 +400,15 @@ def getPackagesPropertiesState():
 
 
 def printPackageHeader():
-    print 'package'.ljust(32) + 'version'.ljust(10) + 'opsiVersion'.ljust(10)
+    print 'package'.ljust(32) + 'version'.ljust(10) + 'opsiVersion'.ljust(13) + 'scripts'.ljust(20)
 
 def printPackageRow(package, pad = 0):
     productVersion = getPackages()[package]['productVersion']
     packageVersion = getPackages()[package]['packageVersion']
-    print ''.ljust(pad) + package.ljust(32) + green + productVersion.ljust(10) + reinitColor + packageVersion.ljust(10)
+    allowedScripts = ''
+    for scriptName in getPackages()[package]['scripts']:
+        allowedScripts += scriptName + ' '
+    print ''.ljust(pad) + package.ljust(32) + green + productVersion.ljust(10) + reinitColor + packageVersion.ljust(13) + grey + allowedScripts.ljust(20) + reinitColor
 
 
 def printPackageProperties(package, pad = 0):
