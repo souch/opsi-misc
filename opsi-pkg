@@ -22,7 +22,7 @@
 # Software Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA
 # 02110-1301 USA, or see the FSF site: http://www.fsf.org.
 #
-# Version 0.1
+# Version 0.2
 
 # TODO: 
 #   set product properties
@@ -325,6 +325,9 @@ def actionHosts(call, hosts):
     logInfo('Done.')
 
 
+# available request with OPSI
+requestsName = ['setup', 'uninstall', 'once', 'update', 'custom', 'userLogin', 'always']
+
 # store packages results
 # {'opsi-client-agent': {'packageVersion': '12', 'productVersion': '4.0.1'}, ... }
 packagesBuf = None
@@ -341,11 +344,10 @@ def getPackages():
             if p['type'] == 'LocalbootProduct':
                 packagesBuf[p['id']] = { 'packageVersion' : p['packageVersion'], 
                                          'productVersion' : p['productVersion'],
-                                         'scripts' : [] }
-                scriptNames = ['setup', 'uninstall', 'once', 'update', 'custom', 'userLogin', 'always']
-                for script in scriptNames:
-                    if p[script + 'Script'] != "":
-                        packagesBuf[p['id']]['scripts'].append(script)
+                                         'requests' : [] }
+                for request in requestsName:
+                    if p[request + 'Script'] != "":
+                        packagesBuf[p['id']]['requests'].append(request)
 
     return packagesBuf
 
@@ -400,14 +402,14 @@ def getPackagesPropertiesState():
 
 
 def printPackageHeader():
-    print 'package'.ljust(32) + 'version'.ljust(10) + 'opsiVersion'.ljust(13) + 'scripts'.ljust(20)
+    print 'package'.ljust(32) + 'version'.ljust(10) + 'opsi_version'.ljust(13) + 'available_requests'.ljust(20)
 
 def printPackageRow(package, pad = 0):
     productVersion = getPackages()[package]['productVersion']
     packageVersion = getPackages()[package]['packageVersion']
     allowedScripts = ''
-    for scriptName in getPackages()[package]['scripts']:
-        allowedScripts += scriptName + ' '
+    for request in getPackages()[package]['requests']:
+        allowedScripts += request + ' '
     print ''.ljust(pad) + package.ljust(32) + green + productVersion.ljust(10) + reinitColor + packageVersion.ljust(13) + grey + allowedScripts.ljust(20) + reinitColor
 
 
@@ -716,7 +718,7 @@ def requestPackage(request, packages, hosts, fire):
         for package in okPackages:
             if (request == 'setup' and not needInstall(host, package)) or \
                (request == 'uninstall' and needInstall(host, package)):
-                warnStr = 'Package ' + package + ' does not need to be ' + action + ' on host ' + host
+                warnStr = 'Package ' + package + ' does not need request "' + request + '" to be done on host ' + host
                 if force:
                     warnStr += ' : request asked will still be done'
                     installDic[host].append(package)
@@ -932,7 +934,18 @@ def printHelp(parser):
     for r in replaceHelp.keys():
         for i in range(len(helpLines)):
             if r in helpLines[i]:
-                helpLines[i] = '  ' + r + ' ' + replaceHelp[r]
+                # do not replace summary usage
+                if helpLines[i].strip()[0] == '[':
+                    continue
+                # keep np space
+                nbSpace = 0
+                for c in helpLines[i]:
+                    if c in ' \t':
+                        nbSpace += 1
+                    else:
+                        break
+                # replace argument explanation
+                helpLines[i] = helpLines[i][0:nbSpace] + replaceHelp[r]
 
     print '\n'.join(helpLines)
 
@@ -1016,8 +1029,10 @@ opsi-pkg -c popup 'hello' -hg pc
 # delete host tutu from OPSI
 opsi-pkg -c delete -h tutu
 
+-
+
 # install firefox on computer tata
-opsi-pkg -s -p firefox -h tata
+opsi-pkg -r setup -p firefox -h tata
 
 # install firefox on computers that belongs to 'pc' host group even if it is 
 # already install and up-to-date and push the setup now
@@ -1028,6 +1043,9 @@ opsi-pkg -s -p firefox -hg pc
 
 # install base packages on computers that belongs to 'pc' host group
 opsi-pkg -s -pg base -hg pc
+
+# uninstall firefox on computers that belongs to 'pc' host group
+opsi-pkg -u -p firefox -hg pc
 
 
 ======
@@ -1076,13 +1094,15 @@ if __name__ == '__main__':
         help='Add something. Combine it with: -hg, -pg, -hg -h, -pg -p')
     parser.add_argument('--delete', '-d', action='store_const', const=[], 
         help='Delete something. Combine it with: -hg, -pg, -hg -h, -pg -p.')
-    parser.add_argument('--call', '-c', nargs='*', 
-        help='Call an action on given hosts. Combine it with: -hg, -h.')
-    replaceHelp['--call'] = '{shutdown, reboot, wakeup, delete, fire, popup "message"} [-h ...]'
-    parser.add_argument('--setup', '-s', action='store_const', const=[], 
-        help='Install products on given hosts. Combine it with: -h, -p.')
-    parser.add_argument('--uninstall', '-u', action='store_const', const=[], 
-        help='Uninstall products on given hosts. Combine it with: -h, -p.')
+    parser.add_argument('--call', '-c', nargs='*', help='Launch action (push it to hosts). Combine it with: -h, -hg')
+    replaceHelp['--call'] = '--call, -c {shutdown, reboot, wakeup, delete, fire, popup "message"}'
+    parser.add_argument('--request', '-r', choices=requestsName,  
+        help='Set next action (pulled by hosts) on given hosts and packages. Combine it with: -h, -hg, -p, -pg, --fire.')
+    replaceHelp['--request'] = '--request, -r {setup, uninstall, once, update, custom, userLogin, always}'
+    parser.add_argument('--setup', '-s', action='store_const', const=[],  
+        help='Shortcut for "-request setup".')
+    parser.add_argument('--uninstall', '-u', action='store_const', const=[],  
+        help='Shortcut for "-request uninstall".')
 
     parser.add_argument('--host', '-h', nargs='*', help='Do sthg with host. No host given means every hosts.)')
     parser.add_argument('--package', '-p', nargs='*', help='Do sthg with package. No package given means every packages.')
@@ -1090,7 +1110,6 @@ if __name__ == '__main__':
     parser.add_argument('--package-group', '-pg', nargs='*', help='Do sthg with package group')
 
 
-    #parser.add_argument('-v', dest='verbose', action='store_true')
     args = parser.parse_args()
 
     # print help if launched without args
@@ -1222,24 +1241,28 @@ if __name__ == '__main__':
             logWarning("You did not specify what to call!")
 
 
-    if args.setup != None or args.uninstall != None:
+    if args.request != None or args.setup != None or args.uninstall != None:
         cmd = True
         what = False
 
+        request = None
+        if args.request != None and len(args.request) > 0 and args.request[0] in requestsName:
+            request = args.request[0]
         if args.setup != None:
-            action = 'setup'
+            request = 'setup'
+        elif args.uninstall != None:
+            request = 'uninstall'
+            
+        if request != None:
+            hosts = getSelectedHosts(args.host, args.host_group)
+            packages = getSelectedPackages(args.package, args.package_group)
+
+            if len(packages) > 0:
+                requestPackage(request, packages, hosts, args.fire != None)
+            else:
+                logWarning("You did not specify packages for request " + request + "!")
         else:
-            action = 'uninstall'
-
-        hosts = getSelectedHosts(args.host, args.host_group)
-        packages = getSelectedPackages(args.package, args.package_group)
-
-        if len(packages) > 0:
-            what = True
-            requestPackage(action, packages, hosts, args.fire != None)
-
-        if not what:
-            logWarning("You did not specify what to " + action + "!")
+            logWarning("request unknown!")
 
 
 
