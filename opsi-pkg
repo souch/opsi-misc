@@ -716,9 +716,22 @@ def requestPackage(request, packages, hosts, fire):
     for host in okHosts:
         installDic[host] = []
         for package in okPackages:
-            if (request == 'setup' and not needInstall(host, package)) or \
-               (request == 'uninstall' and needInstall(host, package)):
-                warnStr = 'Package ' + package + ' does not need request "' + request + '" to be done on host ' + host
+            #requestsName = ['setup', 'uninstall', 'once', 'update', 'custom', 'userLogin', 'always']
+            warnStr = None
+            if requestAlreadyRequested(request, host, package):
+                warnStr = 'request already required'
+            elif installationStatusMatchRequest(request, host, package):
+                if request == 'setup':
+                    if packageUpToDate(host, package):
+                        warnStr = 'package already up to date'
+                    else:
+                        # package not up to date: request ok
+                        pass
+                else:
+                    warnStr = 'status already match request'
+
+            if warnStr != None:
+                warnStr = 'Package ' + package + ' does not need request "' + request + '" to be done on host ' + host.ljust(32) + ' (' + warnStr + ')'
                 if force:
                     warnStr += ' : request asked will still be done'
                     installDic[host].append(package)
@@ -767,26 +780,43 @@ def requestPackage(request, packages, hosts, fire):
             return
 
 
-# return True if the package need to be installed on the host
-def needInstall(host, package):
-    needSetup = True
+# return True if the installed package on the host is already in the last version
+def packageUpToDate(host, package):
+    return getPackageVersion(package) == getPackageVersion(package, host)
 
-    # up to date
-    if getPackageVersion(package) == getPackageVersion(package, host):
-        needSetup = False
 
-    # setup already required
+def requestAlreadyRequested(request, host, package):
+    alreadyRequired = False
+
     for pv in getPackagesFromHosts():
         if pv['clientId'] == host and \
                 pv['productId'] == package and \
                 pv['productType'] == 'LocalbootProduct' and \
-                (pv['installationStatus'] == 'setup' or \
-                 pv['actionRequest'] == 'setup'):
-            needSetup = False
+                pv['actionRequest'] == request:
+            alreadyRequired = True
+            break
+    return alreadyRequired
+
+
+def installationStatusMatchRequest(request, host, package):
+    # only setup and installed has an installation status
+    if request != 'setup' and request != 'uninstall':
+        return False  
+
+    installed = False
+
+    for pv in getPackagesFromHosts():
+        if pv['clientId'] == host and \
+                pv['productId'] == package and \
+                pv['productType'] == 'LocalbootProduct' and \
+                pv['installationStatus'] == 'installed':
+            installed = True
             break
 
-    logDebug('host ' + host + ' need to install ' + package + ': ' + str(needSetup))
-    return needSetup
+    if request == 'setup':
+        return installed
+    else:
+        return not installed
 
 
 # create/update a group
