@@ -757,21 +757,21 @@ def requestPackage(request, packages, hosts, fire):
         # print detailed installation status
         for host in installDic.keys():
             if len(installDic[host]) > 0:
-                logInfo('  ' + request + ' on host ' + host.ljust(32) + ' packages ' + str(installDic[host]))
+                logInfo('  request on host ' + host.ljust(32) + ' packages ' + str(installDic[host]))
     else:
         # print factorized installation status
-        logInfo('  ' + request + ' on hosts ' + str(okHosts)  + '\n        packages ' + str(okPackages))
+        logInfo('  request "' + request + '" on hosts ' + str(okHosts)  + '\n        packages ' + str(okPackages))
 
     nbPackagesToInstall = 0
     for host in installDic.keys():
         nbPackagesToInstall += len(installDic[host])
     if nbPackagesToInstall == 0:
-        logInfo('No package to ' + request + '.')
+        logInfo('No package to request "' + request + '".')
     else:
         if warn:
-            answer = ask('Errors appear, ' + request + ' it anyway?', defaultAnswer=False)
+            answer = ask('Errors appear, launch request anyway?', defaultAnswer=False)
         else:
-            answer = ask(request + ' it?', defaultAnswer=True)
+            answer = ask('Launch request?', defaultAnswer=True)
 
         if answer:
             for host in installDic.keys():
