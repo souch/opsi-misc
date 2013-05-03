@@ -26,14 +26,11 @@
 
 # TODO: 
 #   set product properties
-#   add: set request to none
-#   fix: when ask for uninstall and not installed but request already to setup : set request to none
 #   add: set status manually
-#   add: update on already installed
 #   list only one host
 #   ping using ip
 #   follow Python coding guidelines
-#   check if make-product-package remove defined group
+#   check if make-product-package remove defined group?
 
 
 import argparse
@@ -326,7 +323,7 @@ def actionHosts(call, hosts):
 
 
 # available request with OPSI
-requestsName = ['setup', 'uninstall', 'once', 'update', 'custom', 'userLogin', 'always']
+requestsName = ['setup', 'uninstall', 'once', 'update', 'custom', 'userLogin', 'always', 'none']
 
 # store packages results
 # {'opsi-client-agent': {'packageVersion': '12', 'productVersion': '4.0.1'}, ... }
@@ -346,7 +343,7 @@ def getPackages():
                                          'productVersion' : p['productVersion'],
                                          'requests' : [] }
                 for request in requestsName:
-                    if p[request + 'Script'] != "":
+                    if request != 'none' and p[request + 'Script'] != "":
                         packagesBuf[p['id']]['requests'].append(request)
 
     return packagesBuf
@@ -716,31 +713,44 @@ def requestPackage(request, packages, hosts, fire):
     for host in okHosts:
         installDic[host] = []
         for package in okPackages:
-            #requestsName = ['setup', 'uninstall', 'once', 'update', 'custom', 'userLogin', 'always']
-            warnStr = None
+            warnDetails = None
+            adjustedRequest = request
             if requestAlreadyRequested(request, host, package):
-                warnStr = 'request already required'
+                warnDetails = 'request already required'
+                adjustedRequest = None
             elif installationStatusMatchRequest(request, host, package):
                 if request == 'setup':
                     if packageUpToDate(host, package):
-                        warnStr = 'package already up to date'
+                        warnDetails = 'package already up to date'
+                        if requestAlreadyRequested('none', host, package):
+                            adjustedRequest = None
+                        else:
+                            adjustedRequest = 'none'
+                elif request == 'uninstall':
+                    warnDetails = 'status already match request'
+                    if requestAlreadyRequested('none', host, package):
+                        adjustedRequest = None
                     else:
-                        # package not up to date: request ok
-                        pass
-                else:
-                    warnStr = 'status already match request'
-
-            if warnStr != None:
-                warnStr = 'Package ' + package + ' does not need request "' + request + '" to be done on host ' + host.ljust(32) + ' (' + warnStr + ')'
+                        # reset previous request
+                        adjustedRequest = 'none'
+            
+            if warnDetails != None:
+                warnMsg = 'Package ' + package
+                warnMsg += ' does not need request "' + request
+                warnMsg += '" to be done on host ' + host.ljust(32)
+                warnMsg += ' (' + warnDetails + ')'
                 if force:
-                    warnStr += ' : request asked will still be done'
-                    installDic[host].append(package)
+                    warnMsg += ' : request asked will still be done'
+                    installDic[host].append([package, request])
+                elif adjustedRequest == 'none':
+                    installDic[host].append([package, adjustedRequest])
+                    warnMsg += ' : request set to none'
                 else:
-                    warnStr += ' : request skipped'
-                logWarning(warnStr)
+                    warnMsg += ' : request skipped'
+                logWarning(warnMsg)
                 warn = True
             else:
-                installDic[host].append(package)
+                installDic[host].append([package, request])
 
     # log
     if warn and not force:
@@ -765,12 +775,12 @@ def requestPackage(request, packages, hosts, fire):
 
         if answer:
             for host in installDic.keys():
-                for package in installDic[host]:
-                    cmd = 'opsi-admin -d method setProductActionRequest ' + package + ' ' + host + ' ' + request
+                for package, packageRequest in installDic[host]:
+                    cmd = 'opsi-admin -d method setProductActionRequest ' + package + ' ' + host + ' ' + packageRequest
                     callOpsiAdmin(cmd)
-                    requestMsg = '  ' + request + ' ' + package + ' on host ' + host
+                    requestMsg = '  request "' + packageRequest + '" on ' + package + ' on host ' + host
                     # do it now
-                    if fire:
+                    if packageRequest != 'none' and fire:
                         cmd = 'opsi-admin -d method hostControl_fireEvent "on_demand" ' + host
                         callOpsiAdmin(cmd)
                         requestMsg += ' now'
@@ -799,7 +809,7 @@ def requestAlreadyRequested(request, host, package):
 
 
 def installationStatusMatchRequest(request, host, package):
-    # only setup and installed has an installation status
+    # only setup and installed has an installation status(?)
     if request != 'setup' and request != 'uninstall':
         return False  
 
@@ -1276,9 +1286,9 @@ if __name__ == '__main__':
         what = False
 
         request = None
-        if args.request != None and len(args.request) > 0 and args.request[0] in requestsName:
-            request = args.request[0]
-        if args.setup != None:
+        if args.request != None and args.request in requestsName:
+            request = args.request
+        elif args.setup != None:
             request = 'setup'
         elif args.uninstall != None:
             request = 'uninstall'
@@ -1292,7 +1302,7 @@ if __name__ == '__main__':
             else:
                 logWarning("You did not specify packages for request " + request + "!")
         else:
-            logWarning("request unknown!")
+            logWarning("request not/wrongly specified!")
 
 
 
