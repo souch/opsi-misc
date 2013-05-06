@@ -510,26 +510,21 @@ def printPackagesFromHosts(hosts, packages):
                                 str(pv['actionRequest']) + ' ' + str(pv['installationStatus']) + ' ' + \
                                 str(pv['lastAction']) + ' '  + str(pv['actionResult']))
                         if pv['installationStatus'] == 'installed' or \
-                                pv['actionRequest'] == 'setup' or \
-                                pv['actionRequest'] == 'uninstall' or \
+                                pv['actionRequest'] != 'none' or \
                                 pv['actionResult'] == 'failed':
                             # colorize
                             actionStr = ''
-                            if getPackageVersion(pv['productId']) != pv['productVersion']:
-                                versionColor = red
-                                if pv['actionRequest'] == 'setup':
-                                    actionStr = green + 'setup'
-                                else:
-                                    if pv['actionRequest'] == 'uninstall':
-                                        actionStr = green + 'uninstall'
-                                    else:
-                                        actionStr = red + 'nosetup'
-                                actionStr =  actionStr.ljust(16) + reinitColor
-                            else:
+                            if getPackageVersion(pv['productId']) == pv['productVersion']:
                                 versionColor = green
-                                if pv['actionRequest'] == 'uninstall':
-                                    actionStr = actionStr + 'uninstall'
-
+                                if pv['actionRequest'] != 'none':
+                                    actionStr = actionStr + pv['actionRequest']
+                            else:
+                                versionColor = red
+                                if pv['actionRequest'] != 'none':
+                                    actionStr = green + pv['actionRequest']
+                                else:
+                                    actionStr = red + 'nosetup'
+                                actionStr =  actionStr.ljust(16) + reinitColor
                             if pv['actionResult'] == 'failed':
                                 actionStr = actionStr + red + ' Last action "' + pv['lastAction'] + '" failed!' + reinitColor
 
