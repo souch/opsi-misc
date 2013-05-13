@@ -399,15 +399,13 @@ def getPackagesPropertiesState():
 
 
 def printPackageHeader():
-    print 'package'.ljust(32) + 'version'.ljust(10) + 'opsi_version'.ljust(13) + 'available_requests'.ljust(20)
+    print 'package'.ljust(32) + 'version'.ljust(16) + 'available_requests'.ljust(20)
 
 def printPackageRow(package, pad = 0):
-    productVersion = getPackages()[package]['productVersion']
-    packageVersion = getPackages()[package]['packageVersion']
     allowedScripts = ''
     for request in getPackages()[package]['requests']:
         allowedScripts += request + ' '
-    print ''.ljust(pad) + package.ljust(32) + green + productVersion.ljust(10) + reinitColor + packageVersion.ljust(13) + grey + allowedScripts.ljust(20) + reinitColor
+    print ''.ljust(pad) + package.ljust(32) + green + getProductVersionFull(getPackages()[package]).ljust(16) + reinitColor + grey + allowedScripts.ljust(20) + reinitColor
 
 
 def printPackageProperties(package, pad = 0):
@@ -423,7 +421,7 @@ def printPackageProperties(package, pad = 0):
 def getPackageVersion(package, host = None):
     if host == None:
         if getPackages().has_key(package):
-            return getPackages()[package]['productVersion']
+            return getProductVersionFull(getPackages()[package])
         else:
             return None
     else:
@@ -432,7 +430,7 @@ def getPackageVersion(package, host = None):
                     pv['productId'] == package and \
                     pv['productType'] == 'LocalbootProduct' and \
                     pv['installationStatus'] == 'installed':
-                        return pv['productVersion']
+                        return getProductVersionFull(pv)
         return None
         
 
@@ -493,6 +491,17 @@ def printPackageHostHeader():
 #            'last'.ljust(16)
 
 
+def getProductVersionFull(productDict):
+    productVersion = productDict['productVersion']
+    packageVersion = productDict['packageVersion']
+    if productVersion == None:
+        productVersion = ''
+    if packageVersion == None:
+        packageVersion = ''
+
+    return productVersion + '-' + packageVersion
+
+
 def printPackagesFromHosts(hosts, packages):
         hosts = checkHosts(hosts)
 
@@ -514,7 +523,7 @@ def printPackagesFromHosts(hosts, packages):
                                 pv['actionResult'] == 'failed':
                             # colorize
                             actionStr = ''
-                            if getPackageVersion(pv['productId']) == pv['productVersion']:
+                            if packageUpToDate(pv['clientId'], pv['productId']):
                                 versionColor = green
                                 if pv['actionRequest'] != 'none':
                                     actionStr = actionStr + pv['actionRequest']
@@ -529,7 +538,7 @@ def printPackagesFromHosts(hosts, packages):
                                 actionStr = actionStr + red + ' Last action "' + pv['lastAction'] + '" failed!' + reinitColor
 
                             print '  ' + pv['productId'].ljust(30) + \
-                                    versionColor +  str(pv['productVersion']).ljust(10) + reinitColor + \
+                                    versionColor + getProductVersionFull(pv).ljust(16) + reinitColor + \
                                     actionStr
                             if getPackagesPropertiesState().has_key(k) and getPackagesPropertiesState()[k].has_key(pv['productId']):
                                 packageProps = getPackagesPropertiesState()[k][pv['productId']]
@@ -1081,6 +1090,9 @@ opsi-pkg -s -pg base -hg pc
 
 # uninstall firefox on computers that belongs to 'pc' host group
 opsi-pkg -u -p firefox -hg pc
+
+# reset request on package firefox of the computer tata
+opsi-pkg -r none -p firefox -h tata
 
 
 ======
