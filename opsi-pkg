@@ -409,15 +409,15 @@ def getPackagesDependencies():
     if packagesDependenciesBuf == None:
         packagesDependenciesBuf = {}
         cmd = "opsi-admin -d method productDependency_getObjects"
-        props = callOpsiAdminVar(cmd)
+        deps = callOpsiAdminVar(cmd)
 
-        for prop in props:
-            #if prop['type'] == 'ProductPropertyState':
-            content = { 'requiredProductId' : prop['requiredProductId'], 'productAction' : prop['productAction'] }
-            if packagesDependenciesBuf.has_key(prop['productId']):
-                packagesDependenciesBuf[prop['productId']].append(content)
+        for dep in deps:
+            #if dep['type'] == 'ProductPropertyState':
+            content = { 'requiredProductId' : dep['requiredProductId'], 'productAction' : dep['productAction'] }
+            if packagesDependenciesBuf.has_key(dep['productId']):
+                packagesDependenciesBuf[dep['productId']].append(content)
             else:
-                packagesDependenciesBuf[prop['productId']] = [content]
+                packagesDependenciesBuf[dep['productId']] = [content]
 
     return packagesDependenciesBuf
 
@@ -440,8 +440,8 @@ def printPackageProperties(package, pad = 0):
 
 def printPackageDependencies(package, pad = 0):
     if getPackagesDependencies().has_key(package):
-        for prop in getPackagesDependencies()[package]:
-          print ''.ljust(pad) + 'depends: ' + prop['requiredProductId'] + ' (' + str(prop['productAction']) + ')'
+        for dep in getPackagesDependencies()[package]:
+          print ''.ljust(pad) + 'depends: ' + dep['requiredProductId'] + ' (' + str(dep['productAction']) + ')'
     
 
 # return last product version
@@ -726,6 +726,23 @@ def printGroups(groupType):
                 printPackageRow(o, 24)
 
 
+def requestPackageDependencies(installDic, package, host):
+    # search recursively for dependencies and add them for install if needed
+    # return True if a dep has to be install
+    has_deps = False
+    if getPackagesDependencies().has_key(package):
+        for dep in getPackagesDependencies()[package]:
+            dep_package = dep['requiredProductId']
+            dep_action = dep['productAction']
+            if not installationStatusMatchRequest(dep_action, host, dep_package):
+                if not requestAlreadyRequested(dep_action, host, dep_package):
+                    logWarning(package + ' need dependency ' + dep_package + ' (' + dep_action + ')')
+                    installDic[host].append([dep_package, dep_action])
+                    requestPackageDependencies(installDic, dep_package, host)
+                    has_deps = True
+    return has_deps
+
+ 
 def requestPackage(request, packages, hosts, fire):
 
     if hosts == []:
@@ -768,6 +785,9 @@ def requestPackage(request, packages, hosts, fire):
                         # reset previous request
                         adjustedRequest = 'none'
             
+            if requestPackageDependencies(installDic, package, host) == True:
+                warn = True
+
             if warnDetails != None:
                 warnMsg = 'Package ' + package
                 warnMsg += ' does not need request "' + request
