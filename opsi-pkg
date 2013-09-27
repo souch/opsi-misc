@@ -398,6 +398,30 @@ def getPackagesPropertiesState():
     return packagesPropertiesStateBuf
 
 
+
+# store packages dependancies 
+# {"join_domain": [{'requiredProductId': "samba-prerequisite",  'productAction' : "setup"}, ... ], ... }
+packagesDependenciesBuf = None
+
+def getPackagesDependencies():
+    global packagesDependenciesBuf
+
+    if packagesDependenciesBuf == None:
+        packagesDependenciesBuf = {}
+        cmd = "opsi-admin -d method productDependency_getObjects"
+        props = callOpsiAdminVar(cmd)
+
+        for prop in props:
+            #if prop['type'] == 'ProductPropertyState':
+            content = { 'requiredProductId' : prop['requiredProductId'], 'productAction' : prop['productAction'] }
+            if packagesDependenciesBuf.has_key(prop['productId']):
+                packagesDependenciesBuf[prop['productId']].append(content)
+            else:
+                packagesDependenciesBuf[prop['productId']] = [content]
+
+    return packagesDependenciesBuf
+
+
 def printPackageHeader():
     print 'package'.ljust(32) + 'version'.ljust(16) + 'available_requests'.ljust(20)
 
@@ -413,6 +437,11 @@ def printPackageProperties(package, pad = 0):
         for prop in getPackagesProperties()[package]:
             print ''.ljust(pad) + grey + prop['propertyId'].ljust(32-pad) + str(prop['possibleValues']).ljust(16) + '  d:' + str(prop['defaultValues']) + reinitColor
     
+
+def printPackageDependencies(package, pad = 0):
+    if getPackagesDependencies().has_key(package):
+        for prop in getPackagesDependencies()[package]:
+          print ''.ljust(pad) + 'depends: ' + prop['requiredProductId'] + ' (' + str(prop['productAction']) + ')'
     
 
 # return last product version
@@ -439,6 +468,7 @@ def printPackages():
     print ''
     for package in sorted(getPackages()):
         printPackageRow(package)
+        printPackageDependencies(package, 2)
         printPackageProperties(package, 2)
 
 
